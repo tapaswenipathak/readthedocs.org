@@ -18,9 +18,9 @@ from rest_framework.viewsets import GenericViewSet, ReadOnlyModelViewSet
 from rest_framework_extensions.mixins import NestedViewSetMixin
 
 from readthedocs.builds.models import Build, Version
-from readthedocs.core.utils import trigger_build, trigger_initial_build
+from readthedocs.core.utils import trigger_build
 from readthedocs.projects.models import Project
-from readthedocs.projects.signals import project_import
+from readthedocs.projects.views.mixins import ProjectImportMixin
 
 
 from .filters import BuildFilter, ProjectFilter, VersionFilter
@@ -66,7 +66,8 @@ class APIv3Settings:
 
 
 class ProjectsViewSet(APIv3Settings, NestedViewSetMixin, ProjectQuerySetMixin,
-                      FlexFieldsMixin, CreateModelMixin, ReadOnlyModelViewSet):
+                      FlexFieldsMixin, ProjectImportMixin, CreateModelMixin,
+                      ReadOnlyModelViewSet):
 
     # Markdown docstring is automatically rendered by BrowsableAPIRenderer.
 
@@ -178,32 +179,15 @@ class ProjectsViewSet(APIv3Settings, NestedViewSetMixin, ProjectQuerySetMixin,
                 return mark_safe(description.format(project_slug=project.slug))
         return description
 
-    def create(self, request, *args, **kwargs):
+    def perform_create(self, serializer):
         """
-        Override method to importing a Project.
+        Import Project.
 
-        * Save the Project object
-        * Assign the user from the request as owner
-        * Sent project_import signal
-        * Trigger an initial Build
+        Trigger our internal mechanism to import a project after it's saved in
+        the database.
         """
-        serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
         project = serializer.save()
-        headers = self.get_success_headers(serializer.data)
-
-        # TODO: these lines need to be adapted for Corporate
-        project.users.add(request.user)
-        project_import.send(sender=project, request=request)
-        trigger_initial_build(project, request.user)
-
-        # Full render Project
-        serializer = ProjectSerializer(instance=project)
-        return Response(
-            serializer.data,
-            status=status.HTTP_201_CREATED,
-            headers=headers,
-        )
+        self.import_project(project, [], self.request)
 
     @action(detail=True, methods=['get'])
     def superproject(self, request, project_slug):
